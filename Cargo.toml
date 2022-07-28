@@ -1,6 +1,7 @@
 [package]
 name = "kaspad-stratum"
 authors = ["fungibilly <fungibilly@proton.me>"]
+license = "MIT"
 version = "0.1.0"
 edition = "2021"
 

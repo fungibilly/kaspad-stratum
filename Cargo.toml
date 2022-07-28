@@ -1,0 +1,20 @@
+[package]
+name = "kaspad-stratum"
+authors = ["fungibilly <fungibilly@proton.me>"]
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "3.2", features = ["derive"] }
+env_logger = "0.9"
+log = "0.4"
+prost = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.20", features = ["full"] }
+tokio-stream = "0.1"
+tonic = "0.7"
+
+[build-dependencies]
+tonic-build = "0.7"

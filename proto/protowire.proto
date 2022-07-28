@@ -1,0 +1,148 @@
+// Source: https://github.com/kaspanet/kaspad/blob/master/infrastructure/network/netadapter/server/grpcserver/protowire/rpc.proto
+
+syntax = "proto3";
+package protowire;
+
+message KaspadMessage {
+  oneof payload {
+    GetBlockTemplateRequestMessage getBlockTemplateRequest = 1005;
+    GetBlockTemplateResponseMessage getBlockTemplateResponse = 1006;
+    GetInfoRequestMessage getInfoRequest = 1063;
+    GetInfoResponseMessage getInfoResponse = 1064;
+    NotifyBlockAddedRequestMessage notifyBlockAddedRequest = 1007;
+    NotifyBlockAddedResponseMessage notifyBlockAddedResponse = 1008;
+    BlockAddedNotificationMessage blockAddedNotification = 1009;
+  }
+}
+
+service RPC {
+  rpc MessageStream (stream KaspadMessage) returns (stream KaspadMessage) {}
+}
+
+message RPCError {
+  string message = 1;
+}
+
+message GetBlockTemplateRequestMessage {
+  string payAddress = 1;
+  string extraData = 2;
+}
+
+message GetBlockTemplateResponseMessage {
+  RpcBlock block = 3;
+  bool isSynced = 2;
+  RPCError error = 1000;
+}
+
+
+message RpcBlock {
+  RpcBlockHeader header = 1;
+  repeated RpcTransaction transactions = 2;
+  RpcBlockVerboseData verboseData = 3;
+}
+
+message RpcBlockHeader {
+  uint32 version = 1;
+  repeated RpcBlockLevelParents parents = 12;
+  string hashMerkleRoot = 3;
+  string acceptedIdMerkleRoot = 4;
+  string utxoCommitment = 5;
+  int64 timestamp = 6;
+  uint32 bits = 7;
+  uint64 nonce = 8;
+  uint64 daaScore = 9;
+  string blueWork = 10;
+  string pruningPoint = 14;
+  uint64 blueScore = 13;
+}
+
+message RpcBlockLevelParents {
+  repeated string parentHashes = 1;
+}
+
+message RpcBlockVerboseData{
+  string hash = 1;
+  double difficulty = 11;
+  string selectedParentHash = 13;
+  repeated string transactionIds = 14;
+  bool isHeaderOnly = 15;
+  uint64 blueScore = 16;
+  repeated string childrenHashes = 17;
+  repeated string mergeSetBluesHashes = 18;
+  repeated string mergeSetRedsHashes = 19;
+  bool isChainBlock = 20;
+}
+
+message RpcTransaction {
+  uint32 version = 1;
+  repeated RpcTransactionInput inputs = 2;
+  repeated RpcTransactionOutput outputs = 3;
+  uint64 lockTime = 4;
+  string subnetworkId = 5;
+  uint64 gas = 6;
+  string payload = 8;
+  RpcTransactionVerboseData verboseData = 9;
+}
+
+message RpcTransactionInput {
+  RpcOutpoint previousOutpoint = 1;
+  string signatureScript = 2;
+  uint64 sequence = 3;
+  uint32 sigOpCount = 5;
+  RpcTransactionInputVerboseData verboseData = 4;
+}
+
+message RpcScriptPublicKey {
+  uint32 version = 1;
+  string scriptPublicKey = 2;
+}
+
+message RpcTransactionOutput {
+  uint64 amount = 1;
+  RpcScriptPublicKey scriptPublicKey = 2;
+  RpcTransactionOutputVerboseData verboseData = 3;
+}
+
+message RpcOutpoint {
+  string transactionId = 1;
+  uint32 index = 2;
+}
+
+message RpcTransactionVerboseData{
+  string transactionId = 1;
+  string hash = 2;
+  uint64 mass = 4;
+  string blockHash = 12;
+  uint64 blockTime = 14;
+}
+
+message RpcTransactionInputVerboseData{
+}
+
+message RpcTransactionOutputVerboseData{
+  string scriptPublicKeyType = 5;
+  string scriptPublicKeyAddress = 6;
+}
+
+message GetInfoRequestMessage {
+}
+
+message GetInfoResponseMessage {
+  string p2pId = 1;
+  uint64 mempoolSize = 2;
+  string serverVersion = 3;
+  bool isUtxoIndexed = 4;
+  bool isSynced = 5;
+  RPCError error = 1000;
+}
+
+message NotifyBlockAddedRequestMessage {
+}
+
+message NotifyBlockAddedResponseMessage{
+  RPCError error = 1000;
+}
+
+message BlockAddedNotificationMessage{
+  RpcBlock block = 3;
+}

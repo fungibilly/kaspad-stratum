@@ -1,8 +1,9 @@
 mod server;
 
+use anyhow::Result;
 use serde::{de, Serializer};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 pub use server::Stratum;
 use std::borrow::Cow;
 use std::fmt;
@@ -70,16 +71,28 @@ struct Request {
     params: Option<Value>,
 }
 
-enum Response<T> {
-    Ok(OkResponse<T>),
-    #[allow(dead_code)]
+enum Response {
+    Ok(OkResponse),
     Err(ErrResponse),
 }
 
-impl<T> Serialize for Response<T>
-where
-    T: Serialize,
-{
+impl Response {
+    pub fn ok<T: Serialize>(id: Id, result: T) -> Result<Self> {
+        Ok(Self::Ok(OkResponse {
+            id,
+            result: serde_json::to_value(result)?,
+        }))
+    }
+
+    pub fn err(id: Id, code: u64, message: String) -> Result<Self> {
+        Ok(Self::Err(ErrResponse {
+            id,
+            error: json!((code, message, ())),
+        }))
+    }
+}
+
+impl Serialize for Response {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -92,19 +105,13 @@ where
 }
 
 #[derive(Serialize)]
-struct OkResponse<T> {
+struct OkResponse {
     id: Id,
-    result: T,
+    result: Value,
 }
 
 #[derive(Serialize)]
 struct ErrResponse {
     id: Id,
-    error: Error,
-}
-
-#[derive(Serialize)]
-struct Error {
-    code: u64,
-    message: String,
+    error: Value,
 }

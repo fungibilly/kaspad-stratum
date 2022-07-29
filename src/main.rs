@@ -1,6 +1,7 @@
 mod kaspad;
 mod stratum;
 
+use crate::kaspad::KaspadHandle;
 pub use crate::kaspad::U256;
 use anyhow::Result;
 use clap::Parser;
@@ -36,9 +37,16 @@ async fn main() -> Result<()> {
         .filter_module("kaspad_stratum", level)
         .init();
 
-    let stratum = stratum::Stratum::new(&args.stratum_addr).await?;
+    let (handle, recv_cmd) = KaspadHandle::new();
+    let stratum = stratum::Stratum::new(&args.stratum_addr, handle.clone()).await?;
 
-    let (client, mut msgs) = Client::new(&args.rpc_url, &args.mining_addr, &args.extra_data);
+    let (client, mut msgs) = Client::new(
+        &args.rpc_url,
+        &args.mining_addr,
+        &args.extra_data,
+        handle,
+        recv_cmd,
+    );
     while let Some(msg) = msgs.recv().await {
         match msg {
             Message::Info { version, .. } => {

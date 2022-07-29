@@ -1,6 +1,7 @@
 use anyhow::Result;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use proto::kaspad_message::Payload;
+use proto::submit_block_response_message::RejectReason;
 pub use proto::RpcBlock;
 use proto::*;
 use rpc_client::RpcClient;
@@ -8,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_stream::StreamExt;
 
-type Send<T> = mpsc::UnboundedSender<T>;
+pub type Send<T> = mpsc::UnboundedSender<T>;
 type Recv<T> = mpsc::UnboundedReceiver<T>;
 
 pub struct U256([u64; 4]);
@@ -22,6 +23,21 @@ impl U256 {
 impl From<[u64; 4]> for U256 {
     fn from(v: [u64; 4]) -> Self {
         U256(v)
+    }
+}
+
+#[derive(Clone)]
+pub struct KaspadHandle(Send<Payload>);
+
+impl KaspadHandle {
+    pub fn new() -> (Self, Recv<Payload>) {
+        let (send, recv) = mpsc::unbounded_channel();
+        (KaspadHandle(send), recv)
+    }
+
+    pub fn submit_block(&self, block: RpcBlock) {
+        info!("Submitting block");
+        let _ = self.0.send(Payload::submit_block(block, false));
     }
 }
 
@@ -62,12 +78,31 @@ impl ClientTask {
                         synced: info.is_synced,
                     }
                 }
+                Some(Payload::SubmitBlockResponse(res)) => {
+                    match (RejectReason::from_i32(res.reject_reason), res.error) {
+                        (Some(RejectReason::None), None) => {
+                            info!("Submitted block successfully");
+                        }
+                        (_, Some(e)) => {
+                            warn!("Unable to submit block: {}", e.message);
+                        }
+                        _ => {
+                            warn!("Unable to submit block");
+                        }
+                    }
+                    continue;
+                }
                 Some(Payload::GetBlockTemplateResponse(res)) => {
                     if let Some(e) = res.error {
                         warn!("Error: {}", e.message);
                         continue;
                     }
                     if let Some(block) = res.block {
+                        if !self.synced && res.is_synced {
+                            info!("Node synced");
+                        }
+                        self.synced = res.is_synced;
+
                         if block.header.is_none() {
                             warn!("Template block is missing a header");
                             continue;
@@ -108,15 +143,21 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(url: &str, pay_address: &str, extra_data: &str) -> (Self, Recv<Message>) {
+    pub fn new(
+        url: &str,
+        pay_address: &str,
+        extra_data: &str,
+        handle: KaspadHandle,
+        recv_cmd: Recv<Payload>,
+    ) -> (Self, Recv<Message>) {
         let (send_msg, recv_msg) = mpsc::unbounded_channel();
-        let (send_cmd, recv_cmd) = mpsc::unbounded_channel();
         let task = ClientTask {
             url: url.into(),
             send_msg,
             recv_cmd,
             synced: false,
         };
+
         tokio::spawn(async move {
             match task.run().await {
                 Ok(_) => warn!("Kaspad connection closed"),
@@ -124,6 +165,7 @@ impl Client {
             }
         });
 
+        let send_cmd = handle.0;
         send_cmd.send(Payload::get_info()).unwrap();
         send_cmd.send(Payload::notify_new_block_template()).unwrap();
 
@@ -157,6 +199,13 @@ mod proto {
     impl Payload {
         pub fn get_info() -> Self {
             Payload::GetInfoRequest(GetInfoRequestMessage {})
+        }
+
+        pub fn submit_block(block: RpcBlock, allow_non_daa_blocks: bool) -> Self {
+            Payload::SubmitBlockRequest(SubmitBlockRequestMessage {
+                block: Some(block),
+                allow_non_daa_blocks,
+            })
         }
 
         pub fn get_block_template(pay_address: &str, extra_data: &str) -> Self {

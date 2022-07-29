@@ -5,6 +5,8 @@ package protowire;
 
 message KaspadMessage {
   oneof payload {
+    SubmitBlockRequestMessage submitBlockRequest = 1003;
+    SubmitBlockResponseMessage submitBlockResponse = 1004;
     GetBlockTemplateRequestMessage getBlockTemplateRequest = 1005;
     GetBlockTemplateResponseMessage getBlockTemplateResponse = 1006;
     GetInfoRequestMessage getInfoRequest = 1063;
@@ -33,7 +35,6 @@ message GetBlockTemplateResponseMessage {
   bool isSynced = 2;
   RPCError error = 1000;
 }
-
 
 message RpcBlock {
   RpcBlockHeader header = 1;
@@ -108,7 +109,7 @@ message RpcOutpoint {
   uint32 index = 2;
 }
 
-message RpcTransactionVerboseData{
+message RpcTransactionVerboseData {
   string transactionId = 1;
   string hash = 2;
   uint64 mass = 4;
@@ -116,12 +117,27 @@ message RpcTransactionVerboseData{
   uint64 blockTime = 14;
 }
 
-message RpcTransactionInputVerboseData{
+message RpcTransactionInputVerboseData {
 }
 
-message RpcTransactionOutputVerboseData{
+message RpcTransactionOutputVerboseData {
   string scriptPublicKeyType = 5;
   string scriptPublicKeyAddress = 6;
+}
+
+message SubmitBlockRequestMessage{
+  RpcBlock block = 2;
+  bool allowNonDAABlocks = 3;
+}
+
+message SubmitBlockResponseMessage{
+  enum RejectReason {
+    NONE = 0;
+    BLOCK_INVALID = 1;
+    IS_IN_IBD = 2;
+  }
+  RejectReason rejectReason = 1;
+  RPCError error = 1000;
 }
 
 message GetInfoRequestMessage {

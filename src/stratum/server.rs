@@ -1,5 +1,5 @@
-use crate::kaspad::RpcBlock;
-use crate::stratum::{Id, OkResponse, Request, Response};
+use crate::kaspad::{KaspadHandle, RpcBlock};
+use crate::stratum::{Id, Request, Response};
 use crate::U256;
 use anyhow::Result;
 use log::{debug, info, warn};
@@ -9,7 +9,7 @@ use std::num::Wrapping;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::tcp::{ReadHalf, WriteHalf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::{watch, RwLock};
 
 const NEW_LINE: &'static str = "\n";
@@ -17,6 +17,7 @@ const NEW_LINE: &'static str = "\n";
 struct StratumTask {
     listener: TcpListener,
     recv: watch::Receiver<Option<JobParams>>,
+    jobs: Jobs,
 }
 
 impl StratumTask {
@@ -29,15 +30,25 @@ impl StratumTask {
             }
 
             match self.listener.accept().await {
-                Ok((conn, addr)) => {
+                Ok((mut conn, addr)) => {
                     info!("New connection from {addr}");
-                    let conn = StratumConn {
-                        // addr,
-                        conn,
-                        recv: self.recv.clone(),
-                        worker: worker.0.to_be_bytes(),
-                    };
+                    let recv = self.recv.clone();
+                    let jobs = self.jobs.clone();
+                    let worker = worker.0.to_be_bytes();
+
                     tokio::spawn(async move {
+                        let (reader, writer) = conn.split();
+                        let conn = StratumConn {
+                            // addr,
+                            reader: BufReader::new(reader).lines(),
+                            writer,
+                            recv,
+                            jobs,
+                            worker,
+                            id: 0,
+                            subscribed: false,
+                        };
+
                         match conn.run().await {
                             Ok(_) => info!("Connection {addr} closed"),
                             Err(e) => warn!("Connection {addr} closed: {e}"),
@@ -58,17 +69,19 @@ pub struct Stratum {
 }
 
 impl Stratum {
-    pub async fn new(host: &str) -> Result<Self> {
+    pub async fn new(host: &str, handle: KaspadHandle) -> Result<Self> {
         let (send, recv) = watch::channel(None);
         let listener = TcpListener::bind(host).await?;
         info!("Listening on {host}");
-        let task = StratumTask { listener, recv };
-        tokio::spawn(task.run());
-        let stratum = Stratum {
-            send,
-            jobs: Jobs::new(),
+
+        let jobs = Jobs::new(handle);
+        let task = StratumTask {
+            listener,
+            recv,
+            jobs: jobs.clone(),
         };
-        Ok(stratum)
+        tokio::spawn(task.run());
+        Ok(Stratum { send, jobs })
     }
 
     pub async fn broadcast(&self, template: RpcBlock) {
@@ -78,21 +91,63 @@ impl Stratum {
     }
 }
 
-struct StratumConn {
+struct StratumConn<'a> {
     // addr: SocketAddr,
-    conn: TcpStream,
+    reader: Lines<BufReader<ReadHalf<'a>>>,
+    writer: WriteHalf<'a>,
     recv: watch::Receiver<Option<JobParams>>,
+    jobs: Jobs,
     worker: [u8; 2],
+    id: u64,
+    subscribed: bool,
 }
 
-impl StratumConn {
+impl<'a> StratumConn<'a> {
+    async fn write_template(&mut self) -> Result<()> {
+        debug!("Sending template");
+        let params = {
+            let borrow = self.recv.borrow();
+            match borrow.as_ref() {
+                Some(p) => p.to_value(),
+                None => return Ok(()),
+            }
+        };
+        self.write_request("mining.notify", Some(params)).await
+    }
+
+    async fn write_request(
+        &mut self,
+        method: &'static str,
+        params: Option<serde_json::Value>,
+    ) -> Result<()> {
+        self.id += 1;
+        let req = Request {
+            id: Some(self.id.into()),
+            method: method.into(),
+            params,
+        };
+        self.write(&req).await
+    }
+
+    async fn write_response<T: Serialize>(&mut self, id: Id, result: Option<T>) -> Result<()> {
+        let res = Response::ok(id, result)?;
+        self.write(&res).await
+    }
+
+    #[allow(dead_code)]
+    async fn write_error_response(&mut self, id: Id, code: u64, message: String) -> Result<()> {
+        let res = Response::err(id, code, message)?;
+        self.write(&res).await
+    }
+
+    async fn write<T: Serialize>(&mut self, data: &T) -> Result<()> {
+        let data = serde_json::to_vec(data)?;
+        self.writer.write_all(&data).await?;
+        self.writer.write_all(NEW_LINE.as_ref()).await?;
+        Ok(())
+    }
+
     async fn run(mut self) -> Result<()> {
-        let (reader, mut writer) = self.conn.split();
-        let mut reader = BufReader::new(reader).lines();
-
-        let mut id = 0u64;
-        let mut subscribed = false;
-
         loop {
             tokio::select! {
                 res = self.recv.changed() => match res {
@@ -101,36 +156,41 @@ impl StratumConn {
                         break;
                     }
                     Ok(_) => {
-                        if subscribed {
-                            id += 1;
-                            if let Some(t) = template(&self.recv, id) {
-                                debug!("Sending template");
-                                write_req(&mut writer, t).await?;
-                            }
+                        if self.subscribed {
+                            self.write_template().await?;
                         }
                     }
                 },
-                res = read(&mut reader) => match res {
+                res = read(&mut self.reader) => match res {
                     Ok(Some(msg)) => {
-                        if &msg.method == "mining.subscribe" && msg.id.is_some() {
-                            debug!("Miner subscribed");
-                            subscribed = true;
-                            write_res::<()>(&mut writer, msg.id.unwrap(), None).await?;
-                            id += 1;
-                            write_req(&mut writer, Request {
-                                id: Some(id.into()),
-                                method: "set_extranonce".into(),
-                                params: Some(json!([hex::encode(&self.worker), 4]))
-                            }).await?;
+                        match (msg.id, &*msg.method, msg.params) {
+                            (Some(id), "mining.subscribe", _) => {
+                                debug!("Worker subscribed");
+                                self.subscribed = true;
+                                self.write_response(id, Some(true)).await?;
 
-                            id += 1;
-                            if let Some(t) = template(&self.recv, id) {
-                                debug!("Sending template");
-                                write_req(&mut writer, t).await?;
+                                self.write_request(
+                                    "set_extranonce",
+                                    Some(json!([hex::encode(&self.worker), 6u64]))
+                                ).await?;
+                                self.write_template().await?;
                             }
-                        }
-                        else {
-                            debug!("Got unknown {}", msg.method);
+                            (Some(i), "mining.submit", Some(p)) => {
+                                let (_, id, nonce): (String, String, String) = serde_json::from_value(p)?;
+                                let id = u8::from_str_radix(&id, 16)?;
+                                let nonce = u64::from_str_radix(nonce.trim_start_matches("0x"), 16)?;
+                                if self.jobs.submit(id, nonce).await {
+                                    debug!("Submit new block");
+                                    self.write_response(i, Some(true)).await?;
+                                }
+                                else {
+                                    debug!("Unable to submit new block");
+                                    self.write_error_response(i, 20, "Unable to submit block".into()).await?;
+                                }
+                            }
+                            _ => {
+                                debug!("Got unknown {}", msg.method);
+                            }
                         }
                     }
                     Ok(None) => break,
@@ -142,14 +202,6 @@ impl StratumConn {
     }
 }
 
-fn template(recv: &watch::Receiver<Option<JobParams>>, id: u64) -> Option<Request> {
-    Some(Request {
-        id: Some(id.into()),
-        method: "mining.notify".into(),
-        params: Some(recv.borrow().as_ref()?.to_value()),
-    })
-}
-
 async fn read(r: &mut Lines<BufReader<ReadHalf<'_>>>) -> Result<Option<Request>> {
     let line = match r.next_line().await? {
         Some(l) => l,
@@ -158,32 +210,18 @@ async fn read(r: &mut Lines<BufReader<ReadHalf<'_>>>) -> Result<Option<Request>>
     Ok(Some(serde_json::from_str(&line)?))
 }
 
-async fn write_req(w: &mut WriteHalf<'_>, req: Request) -> Result<()> {
-    let data = serde_json::to_vec(&req)?;
-    w.write_all(&data).await?;
-    w.write_all(NEW_LINE.as_ref()).await?;
-    Ok(())
-}
-
-async fn write_res<T: Serialize>(w: &mut WriteHalf<'_>, id: Id, result: Option<T>) -> Result<()> {
-    let res = Response::Ok(OkResponse { id, result });
-    let data = serde_json::to_vec(&res)?;
-    w.write_all(&data).await?;
-    w.write_all(NEW_LINE.as_ref()).await?;
-    Ok(())
-}
-
 #[derive(Clone)]
 struct Jobs {
     inner: Arc<RwLock<JobsInner>>,
 }
 
 impl Jobs {
-    fn new() -> Self {
+    fn new(handle: KaspadHandle) -> Self {
         Self {
             inner: Arc::new(RwLock::new(JobsInner {
                 next: 0,
                 jobs: Vec::with_capacity(256),
+                handle,
             })),
         }
     }
@@ -209,10 +247,28 @@ impl Jobs {
             timestamp,
         })
     }
+
+    async fn submit(&self, id: u8, nonce: u64) -> bool {
+        let (mut block, handle) = {
+            let r = self.inner.read().await;
+            let block = match r.jobs.get(id as usize) {
+                Some(b) => b.clone(),
+                None => return false,
+            };
+            (block, r.handle.clone())
+        };
+        if let Some(header) = &mut block.header {
+            header.nonce = nonce;
+            handle.submit_block(block);
+            return true;
+        }
+        false
+    }
 }
 
 struct JobsInner {
     next: u8,
+    handle: KaspadHandle,
     jobs: Vec<RpcBlock>,
 }
 
@@ -224,7 +280,7 @@ struct JobParams {
 
 impl JobParams {
     fn to_value(&self) -> serde_json::Value {
-        serde_json::json!([
+        json!([
             hex::encode([self.id]),
             self.pre_pow.as_slice(),
             self.timestamp

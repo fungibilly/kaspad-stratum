@@ -47,6 +47,7 @@ impl StratumTask {
                             worker,
                             id: 0,
                             subscribed: false,
+                            difficulty: 0,
                         };
 
                         match conn.run().await {
@@ -100,19 +101,28 @@ struct StratumConn<'a> {
     worker: [u8; 2],
     id: u64,
     subscribed: bool,
+    difficulty: u64,
 }
 
 impl<'a> StratumConn<'a> {
     async fn write_template(&mut self) -> Result<()> {
         debug!("Sending template");
-        let params = {
+        let (difficulty, params) = {
             let borrow = self.recv.borrow();
             match borrow.as_ref() {
-                Some(p) => p.to_value(),
+                Some(j) => (j.difficulty, j.to_value()),
                 None => return Ok(()),
             }
         };
-        self.write_request("mining.notify", Some(params)).await
+        self.write_request("mining.notify", Some(params)).await?;
+
+        if self.difficulty == 0 {
+            self.difficulty = difficulty >> 32;
+            self.write_request("mining.set_difficulty", Some(json!([self.difficulty])))
+                .await?;
+        }
+
+        Ok(())
     }
 
     async fn write_request(
@@ -229,6 +239,7 @@ impl Jobs {
     async fn insert(&self, template: RpcBlock) -> Option<JobParams> {
         let header = template.header.as_ref()?;
         let pre_pow = header.pre_pow().ok()?;
+        let difficulty = header.difficulty();
         let timestamp = header.timestamp as u64;
 
         let mut w = self.inner.write().await;
@@ -244,6 +255,7 @@ impl Jobs {
         Some(JobParams {
             id,
             pre_pow,
+            difficulty,
             timestamp,
         })
     }
@@ -275,6 +287,7 @@ struct JobsInner {
 struct JobParams {
     id: u8,
     pre_pow: U256,
+    difficulty: u64,
     timestamp: u64,
 }
 

@@ -12,20 +12,6 @@ use tokio_stream::StreamExt;
 pub type Send<T> = mpsc::UnboundedSender<T>;
 type Recv<T> = mpsc::UnboundedReceiver<T>;
 
-pub struct U256([u64; 4]);
-
-impl U256 {
-    pub fn as_slice(&self) -> &[u64] {
-        &self.0
-    }
-}
-
-impl From<[u64; 4]> for U256 {
-    fn from(v: [u64; 4]) -> Self {
-        U256(v)
-    }
-}
-
 #[derive(Clone)]
 pub struct KaspadHandle(Send<Payload>);
 
@@ -189,6 +175,7 @@ impl Client {
 }
 
 mod proto {
+    use crate::pow;
     use crate::U256;
     use anyhow::Result;
     use blake2b_simd::Hash;
@@ -221,6 +208,11 @@ mod proto {
     }
 
     impl RpcBlockHeader {
+        pub fn difficulty(&self) -> u64 {
+            let target = pow::u256_from_compact_target(self.bits);
+            pow::difficulty(target)
+        }
+
         pub fn pre_pow(&self) -> Result<U256> {
             let hash = self.hash(true)?;
             let mut out = [0; 4];

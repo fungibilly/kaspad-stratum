@@ -1,8 +1,10 @@
 mod kaspad;
+mod pow;
 mod stratum;
+mod uint;
 
 use crate::kaspad::KaspadHandle;
-pub use crate::kaspad::U256;
+pub use crate::uint::U256;
 use anyhow::Result;
 use clap::Parser;
 use kaspad::{Client, Message};

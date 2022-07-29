@@ -1,6 +1,7 @@
 mod kaspad;
 mod stratum;
 
+pub use crate::kaspad::U256;
 use anyhow::Result;
 use clap::Parser;
 use kaspad::{Client, Message};
@@ -12,37 +13,47 @@ struct Args {
     rpc_url: String,
     #[clap(short, long, default_value = "127.0.0.1:6969")]
     stratum_addr: String,
+    #[clap(short, long, default_value = "kaspad-stratum")]
+    extra_data: String,
     #[clap(short, long)]
     mining_addr: String,
+    #[clap(short, long)]
+    debug: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    let level = if args.debug {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Info
+    };
+
     env_logger::Builder::new()
         .filter_level(log::LevelFilter::Info)
-        .filter_module("kaspad_stratum", LevelFilter::Debug)
+        .filter_module("kaspad_stratum", level)
         .init();
-
-    let args = Args::parse();
 
     let stratum = stratum::Stratum::new(&args.stratum_addr).await?;
 
-    let (client, mut msgs) = Client::new(&args.rpc_url, &args.mining_addr);
+    let (client, mut msgs) = Client::new(&args.rpc_url, &args.mining_addr, &args.extra_data);
     while let Some(msg) = msgs.recv().await {
         match msg {
             Message::Info { version, .. } => {
                 info!("Connected to Kaspad {version}");
             }
-            Message::NewBlock => {
-                debug!("New block, requesting template");
+            Message::NewTemplate => {
+                debug!("Requesting new template");
                 if !client.request_template() {
                     debug!("Channel closed");
                     break;
                 }
             }
-            Message::Template(header) => {
-                info!("Received block template");
-                stratum.broadcast(header);
+            Message::Template(template) => {
+                debug!("Received block template");
+                stratum.broadcast(template).await;
             }
         }
     }

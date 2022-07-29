@@ -9,9 +9,9 @@ message KaspadMessage {
     GetBlockTemplateResponseMessage getBlockTemplateResponse = 1006;
     GetInfoRequestMessage getInfoRequest = 1063;
     GetInfoResponseMessage getInfoResponse = 1064;
-    NotifyBlockAddedRequestMessage notifyBlockAddedRequest = 1007;
-    NotifyBlockAddedResponseMessage notifyBlockAddedResponse = 1008;
-    BlockAddedNotificationMessage blockAddedNotification = 1009;
+    NotifyNewBlockTemplateRequestMessage notifyNewBlockTemplateRequest = 1081;
+    NotifyNewBlockTemplateResponseMessage notifyNewBlockTemplateResponse = 1082;
+    NewBlockTemplateNotificationMessage newBlockTemplateNotification = 1083;
   }
 }
 
@@ -136,13 +136,12 @@ message GetInfoResponseMessage {
   RPCError error = 1000;
 }
 
-message NotifyBlockAddedRequestMessage {
+message NotifyNewBlockTemplateRequestMessage {
 }
 
-message NotifyBlockAddedResponseMessage{
+message NotifyNewBlockTemplateResponseMessage {
   RPCError error = 1000;
 }
 
-message BlockAddedNotificationMessage{
-  RpcBlock block = 3;
+message NewBlockTemplateNotificationMessage {
 }

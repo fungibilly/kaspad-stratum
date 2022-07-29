@@ -12,6 +12,12 @@ enum Id {
     Text(Box<str>),
 }
 
+impl From<u64> for Id {
+    fn from(v: u64) -> Self {
+        Id::Number(v)
+    }
+}
+
 struct IdVisitor;
 impl<'de> de::Visitor<'de> for IdVisitor {
     type Value = Id;
@@ -66,6 +72,7 @@ struct Request {
 
 enum Response<T> {
     Ok(OkResponse<T>),
+    #[allow(dead_code)]
     Err(ErrResponse),
 }
 

@@ -138,7 +138,7 @@ impl Client {
     ) -> (Self, Recv<Message>) {
         let (send_msg, recv_msg) = mpsc::unbounded_channel();
 
-        let pay_address = if !pay_address.starts_with("kaspa:") {
+        let pay_address = if !pay_address.starts_with("kaspa") {
             format!("kaspa:{}", pay_address)
         } else {
             pay_address.into()

@@ -1,5 +1,4 @@
 use crate::uint::{BitArray, U256};
-use std::ops::Not;
 
 pub fn u256_from_compact_target(bits: u32) -> U256 {
     let (mant, expt) = {

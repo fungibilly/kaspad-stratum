@@ -24,9 +24,9 @@ impl StratumTask {
     async fn run(self) {
         let mut worker = Wrapping(0u16);
         loop {
-            worker += 1;
+            worker += 1u16;
             if worker.0 == 0 {
-                worker += 1;
+                worker += 1u16;
             }
 
             match self.listener.accept().await {

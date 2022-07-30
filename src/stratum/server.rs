@@ -5,6 +5,7 @@ use anyhow::Result;
 use log::{debug, info, warn};
 use serde::Serialize;
 use serde_json::json;
+use std::cmp::max;
 use std::num::Wrapping;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
@@ -107,7 +108,7 @@ struct StratumConn<'a> {
 impl<'a> StratumConn<'a> {
     async fn write_template(&mut self) -> Result<()> {
         debug!("Sending template");
-        let (difficulty, params) = {
+        let (mut difficulty, params) = {
             let borrow = self.recv.borrow();
             match borrow.as_ref() {
                 Some(j) => (j.difficulty, j.to_value()),
@@ -116,8 +117,9 @@ impl<'a> StratumConn<'a> {
         };
         self.write_request("mining.notify", Some(params)).await?;
 
-        if self.difficulty == 0 {
-            self.difficulty = difficulty >> 32;
+        difficulty = max(difficulty >> 32, 1);
+        if self.difficulty != difficulty {
+            self.difficulty = difficulty;
             self.write_request("mining.set_difficulty", Some(json!([self.difficulty])))
                 .await?;
         }

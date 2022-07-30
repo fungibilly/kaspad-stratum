@@ -137,6 +137,13 @@ impl Client {
         recv_cmd: Recv<Payload>,
     ) -> (Self, Recv<Message>) {
         let (send_msg, recv_msg) = mpsc::unbounded_channel();
+
+        let pay_address = if !pay_address.starts_with("kaspa:") {
+            format!("kaspa:{}", pay_address)
+        } else {
+            pay_address.into()
+        };
+
         let url = if !url.starts_with("http") {
             format!("http://{}", url)
         } else {
@@ -161,7 +168,7 @@ impl Client {
         send_cmd.send(Payload::notify_new_block_template()).unwrap();
 
         let client = Client {
-            pay_address: pay_address.into(),
+            pay_address,
             extra_data: extra_data.into(),
             send_cmd,
         };

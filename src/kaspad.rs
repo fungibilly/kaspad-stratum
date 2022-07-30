@@ -137,8 +137,13 @@ impl Client {
         recv_cmd: Recv<Payload>,
     ) -> (Self, Recv<Message>) {
         let (send_msg, recv_msg) = mpsc::unbounded_channel();
+        let url = if !url.starts_with("http") {
+            format!("http://{}", url)
+        } else {
+            url.into()
+        };
         let task = ClientTask {
-            url: url.into(),
+            url,
             send_msg,
             recv_cmd,
             synced: false,

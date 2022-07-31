@@ -22,7 +22,6 @@ impl KaspadHandle {
     }
 
     pub fn submit_block(&self, block: RpcBlock) {
-        info!("Submitting block");
         let _ = self.0.send(Payload::submit_block(block, false));
     }
 }
@@ -32,6 +31,7 @@ pub enum Message {
     Info { version: String, synced: bool },
     Template(RpcBlock),
     NewTemplate,
+    SubmitBlockResult(Option<Box<str>>),
 }
 
 struct ClientTask {
@@ -65,18 +65,12 @@ impl ClientTask {
                     }
                 }
                 Some(Payload::SubmitBlockResponse(res)) => {
-                    match (RejectReason::from_i32(res.reject_reason), res.error) {
-                        (Some(RejectReason::None), None) => {
-                            info!("Submitted block successfully");
-                        }
-                        (_, Some(e)) => {
-                            warn!("Unable to submit block: {}", e.message);
-                        }
-                        _ => {
-                            warn!("Unable to submit block");
-                        }
-                    }
-                    continue;
+                    let res = match (RejectReason::from_i32(res.reject_reason), res.error) {
+                        (Some(RejectReason::None), None) => None,
+                        (_, Some(e)) => Some(e.message.into_boxed_str()),
+                        _ => Some("Unknown error".into()),
+                    };
+                    Message::SubmitBlockResult(res)
                 }
                 Some(Payload::GetBlockTemplateResponse(res)) => {
                     if let Some(e) = res.error {

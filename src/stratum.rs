@@ -1,3 +1,4 @@
+mod jobs;
 mod server;
 
 use anyhow::Result;
@@ -8,7 +9,8 @@ pub use server::Stratum;
 use std::borrow::Cow;
 use std::fmt;
 
-enum Id {
+#[derive(Clone)]
+pub enum Id {
     Number(u64),
     Text(Box<str>),
 }
@@ -71,7 +73,7 @@ struct Request {
     params: Option<Value>,
 }
 
-enum Response {
+pub enum Response {
     Ok(OkResponse),
     Err(ErrResponse),
 }
@@ -84,7 +86,7 @@ impl Response {
         }))
     }
 
-    pub fn err(id: Id, code: u64, message: String) -> Result<Self> {
+    pub fn err(id: Id, code: u64, message: Box<str>) -> Result<Self> {
         Ok(Self::Err(ErrResponse {
             id,
             error: json!((code, message, ())),
@@ -105,13 +107,13 @@ impl Serialize for Response {
 }
 
 #[derive(Serialize)]
-struct OkResponse {
+pub struct OkResponse {
     id: Id,
     result: Value,
 }
 
 #[derive(Serialize)]
-struct ErrResponse {
+pub struct ErrResponse {
     id: Id,
     error: Value,
 }

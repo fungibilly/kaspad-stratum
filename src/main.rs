@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     };
 
     env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Info)
+        .filter_level(LevelFilter::Info)
         .filter_module("kaspad_stratum", level)
         .init();
 
@@ -64,6 +64,14 @@ async fn main() -> Result<()> {
             Message::Template(template) => {
                 debug!("Received block template");
                 stratum.broadcast(template).await;
+            }
+            Message::SubmitBlockResult(error) => {
+                debug!("Resolve pending job");
+                match &error {
+                    Some(e) => debug!("Submitted invalid block: {e}"),
+                    None => info!("Found a block!"),
+                }
+                stratum.resolve_pending_job(error).await;
             }
         }
     }

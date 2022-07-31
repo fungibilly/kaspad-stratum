@@ -1,16 +1,15 @@
+use super::jobs::{JobParams, Jobs, PendingResult};
+use super::{Id, Request, Response};
 use crate::kaspad::{KaspadHandle, RpcBlock};
-use crate::stratum::{Id, Request, Response};
-use crate::U256;
 use anyhow::Result;
 use log::{debug, info, warn};
 use serde::Serialize;
 use serde_json::json;
 use std::num::Wrapping;
-use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::TcpListener;
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{mpsc, watch};
 
 const NEW_LINE: &'static str = "\n";
 
@@ -35,6 +34,7 @@ impl StratumTask {
                     let recv = self.recv.clone();
                     let jobs = self.jobs.clone();
                     let worker = worker.0.to_be_bytes();
+                    let (pending_send, pending_recv) = mpsc::unbounded_channel();
 
                     tokio::spawn(async move {
                         let (reader, writer) = conn.split();
@@ -44,6 +44,8 @@ impl StratumTask {
                             writer,
                             recv,
                             jobs,
+                            pending_send,
+                            pending_recv,
                             worker,
                             id: 0,
                             subscribed: false,
@@ -90,6 +92,10 @@ impl Stratum {
             let _ = self.send.send(Some(job));
         }
     }
+
+    pub async fn resolve_pending_job(&self, error: Option<Box<str>>) {
+        self.jobs.resolve_pending(error).await
+    }
 }
 
 struct StratumConn<'a> {
@@ -98,6 +104,8 @@ struct StratumConn<'a> {
     writer: WriteHalf<'a>,
     recv: watch::Receiver<Option<JobParams>>,
     jobs: Jobs,
+    pending_send: mpsc::UnboundedSender<PendingResult>,
+    pending_recv: mpsc::UnboundedReceiver<PendingResult>,
     worker: [u8; 2],
     id: u64,
     subscribed: bool,
@@ -110,7 +118,7 @@ impl<'a> StratumConn<'a> {
         let (difficulty, params) = {
             let borrow = self.recv.borrow();
             match borrow.as_ref() {
-                Some(j) => (j.difficulty, j.to_value()),
+                Some(j) => (j.difficulty(), j.to_value()),
                 None => return Ok(()),
             }
         };
@@ -145,8 +153,7 @@ impl<'a> StratumConn<'a> {
         self.write(&res).await
     }
 
-    #[allow(dead_code)]
-    async fn write_error_response(&mut self, id: Id, code: u64, message: String) -> Result<()> {
+    async fn write_error_response(&mut self, id: Id, code: u64, message: Box<str>) -> Result<()> {
         let res = Response::err(id, code, message)?;
         self.write(&res).await
     }
@@ -172,6 +179,10 @@ impl<'a> StratumConn<'a> {
                         }
                     }
                 },
+                item = self.pending_recv.recv() => {
+                    let res = item.expect("channel is always open").into_response()?;
+                    self.write(&res).await?;
+                },
                 res = read(&mut self.reader) => match res {
                     Ok(Some(msg)) => {
                         match (msg.id, &*msg.method, msg.params) {
@@ -190,9 +201,8 @@ impl<'a> StratumConn<'a> {
                                 let (_, id, nonce): (String, String, String) = serde_json::from_value(p)?;
                                 let id = u8::from_str_radix(&id, 16)?;
                                 let nonce = u64::from_str_radix(nonce.trim_start_matches("0x"), 16)?;
-                                if self.jobs.submit(id, nonce).await {
+                                if self.jobs.submit(i.clone(), id, nonce, self.pending_send.clone()).await {
                                     debug!("Submit new block");
-                                    self.write_response(i, Some(true)).await?;
                                 }
                                 else {
                                     debug!("Unable to submit new block");
@@ -219,85 +229,4 @@ async fn read(r: &mut Lines<BufReader<ReadHalf<'_>>>) -> Result<Option<Request>>
         None => return Ok(None),
     };
     Ok(Some(serde_json::from_str(&line)?))
-}
-
-#[derive(Clone)]
-struct Jobs {
-    inner: Arc<RwLock<JobsInner>>,
-}
-
-impl Jobs {
-    fn new(handle: KaspadHandle) -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(JobsInner {
-                next: 0,
-                jobs: Vec::with_capacity(256),
-                handle,
-            })),
-        }
-    }
-
-    async fn insert(&self, template: RpcBlock) -> Option<JobParams> {
-        let header = template.header.as_ref()?;
-        let pre_pow = header.pre_pow().ok()?;
-        let difficulty = header.difficulty();
-        let timestamp = header.timestamp as u64;
-
-        let mut w = self.inner.write().await;
-        let len = w.jobs.len();
-        let id = if len < 256 {
-            w.jobs.push(template);
-            len as u8
-        } else {
-            w.next
-        };
-        w.next = id.wrapping_add(1);
-
-        Some(JobParams {
-            id,
-            pre_pow,
-            difficulty,
-            timestamp,
-        })
-    }
-
-    async fn submit(&self, id: u8, nonce: u64) -> bool {
-        let (mut block, handle) = {
-            let r = self.inner.read().await;
-            let block = match r.jobs.get(id as usize) {
-                Some(b) => b.clone(),
-                None => return false,
-            };
-            (block, r.handle.clone())
-        };
-        if let Some(header) = &mut block.header {
-            header.nonce = nonce;
-            handle.submit_block(block);
-            return true;
-        }
-        false
-    }
-}
-
-struct JobsInner {
-    next: u8,
-    handle: KaspadHandle,
-    jobs: Vec<RpcBlock>,
-}
-
-struct JobParams {
-    id: u8,
-    pre_pow: U256,
-    difficulty: u64,
-    timestamp: u64,
-}
-
-impl JobParams {
-    fn to_value(&self) -> serde_json::Value {
-        json!([
-            hex::encode([self.id]),
-            self.pre_pow.as_slice(),
-            self.timestamp
-        ])
-    }
 }
